@@ -1,15 +1,7 @@
 /*
-10/10/08 The program is fully functional in it's semi original state. I have added a
-number of system calls to "cls" to make the display more attractive. The data file is
-still called "junk.dat" and the program will look for it on the D: drive in a folder called cppSpace.
-This can  easily be modified below, but it does need to have access to a file for storage for
-it to function as expected. I will work on adding the BSTree functionality this weekend.
-Email me when you get the dynamic memory working. -Dave
-
-10/11/08 I started implementing the dict class as a BS Tree. -Dave
-
-10/11/08 BSTree implemented and compiles, howerver, it produces run-time errors. Please
-check my code to see if there is something I am missing. Thanks -Dave
+Dictionary Project using Red-Black tree
+UMES CSDP 601
+D. Raizen
 */
 #include <iostream>
 #include <iomanip>
@@ -18,9 +10,9 @@ check my code to see if there is something I am missing. Thanks -Dave
 #include <ctype.h>
 
 using namespace std;
-const int VSIZE = 5;
+const int VSIZE = 100;
 
-const char OURDATAFILE[] = "d:\\cppSpace\\junk.dat";
+const char OURDATAFILE[] = "c:\\Space\\junk.dat";
 //Classes Needed
 class wDPair
 {
@@ -35,8 +27,9 @@ class wDPair
         void changeWord(const char*);
         void changeDef(const char*);
     private:
-        char theWord[15];
-        char theDef[25];
+        char* theWord;
+        char* theDef;
+        char color;         //to implement RBTree
         wDPair *p;          //added pointers to implement BST
         wDPair *left;
         wDPair *right;
@@ -57,11 +50,17 @@ class dict                          //most work converting to RB tree will go he
         int tellSize() const;
         const wDPair* tellFirst();      //part of 'built in' iterator
         const wDPair* tellNext();       //part two of iterator
+        const wDPair* tellRoot() const;
         bool diskSave(const char*);     //file name - false on fail
         bool diskRecover(const char*);
-        wDPair * nextPair(wDPair*);     //Non-constant next function used in the deletePair function.
+
     protected:
         //wDPair theDic[VSIZE];           //10-10 changing this to a BS Tree...
+        void leftRot(wDPair*);
+        void rightRot(wDPair*);
+        bool insertFix(wDPair*);
+        bool deleteFix(wDPair*);
+        wDPair * nextPair(wDPair*);     //Non-constant next function used in the deletePair function.
         wDPair* nil;                       //pointer to Nil node
         wDPair* root;                     //pointer to root
         int currentSize;
@@ -120,47 +119,94 @@ int main(void)
 
 wDPair::wDPair(const char* newWord, const char* newDef)
 {
-    cout << "New wDPair constructed..."<<endl;
+//    cout << "New wDPair constructed..."<<endl;
     if (newWord != NULL)
     {
+        theWord = new char[strlen(newWord)+1];
         strcpy(theWord, newWord);
     }
     else
     {
-        theWord[0] = 0;
+        theWord = NULL;
     };
     if (newDef != NULL)
     {
+        theDef = new char[strlen(newDef)+1];
         strcpy(theDef, newDef);
     }
     else
     {
-        theDef[0] = 0;
+        theDef = NULL;
     };
     this->p = this->left = this->right = NULL;
+    this->color = 'R';
 };
 
 
 wDPair::wDPair(const wDPair & otherPair)
 {
-    strcpy(theWord, otherPair.theWord);
-    strcpy(theDef, otherPair.theDef);
+    if (otherPair.theWord == NULL)
+    {
+        theWord = NULL;
+    }
+    else
+    {
+        delete[] theWord;
+        theWord = new char[strlen(otherPair.theWord)+1];
+        strcpy(theWord, otherPair.theWord);
+    }
+    if (otherPair.theDef == NULL)
+    {
+        theDef = NULL;
+    }
+    else
+    {
+        delete[] theDef;
+        theDef = new char[strlen(otherPair.theDef)+1];
+        strcpy(theDef, otherPair.theDef);
+    }
 };
 
 wDPair::~wDPair()
 {
-    //Somehow delete pair...
+    if (theWord != NULL)    //Delete pair...
+    {
+        delete[] theWord;
+    }
+    if (theDef != NULL)
+    {
+        delete[] theDef;
+    }
 };
 
 wDPair & wDPair::operator= (const wDPair & otherPair)
 {
     if (this != & otherPair)
     {
-        strcpy(theWord, otherPair.theWord);
-        strcpy(theDef, otherPair.theDef);
+        if (otherPair.theWord == NULL)
+        {
+            theWord = NULL;
+        }
+        else
+        {
+            delete[] theWord;
+            theWord = new char[strlen(otherPair.theWord)+1];
+            strcpy(theWord, otherPair.theWord);
+        }
+        if (otherPair.theDef == NULL)
+        {
+            theDef = NULL;
+        }
+        else
+        {
+            delete[] theDef;
+            theDef = new char[strlen(otherPair.theDef)+1];
+            strcpy(theDef, otherPair.theDef);
+        }
         this->p = otherPair.p;                   //Must copy a node's pointers as well as it's data...
         this->left = otherPair.left;
         this->right = otherPair.right;
+        this->color = otherPair.color;
     };
     return * this;
 };
@@ -177,11 +223,15 @@ const char * wDPair::tellDef()const
 
 void wDPair::changeWord(const char * newWord)
 {
+    delete[] theWord;
+    theWord = new char[strlen(newWord)+1];
     strcpy(theWord, newWord);
 };
 
 void wDPair::changeDef(const char * newDef)
 {
+    delete[] theDef;
+    theDef = new char[strlen(newDef)+1];
     strcpy(theDef, newDef);
 };
 
@@ -191,18 +241,23 @@ void wDPair::changeDef(const char * newDef)
 //Many changes here to implement BSTree
 dict::dict(char* fileName)
 {
-    cout << "New dict..."<<endl;
+//    cout << "New dict..."<<endl;
     currentSize = 0;
     if(fileName != NULL)
     {
+//        cout<<"fileName != NULL"<<endl;
         diskRecover(fileName);
     }
     else
     {
+//        cout<<"fileName == NULL"<<endl;
         nil = new wDPair();
-        root = NULL;            //set the root initially to nil
+        nil->theWord = "";
+        nil->color = 'B';
+        root = NULL;            //set the root initially to NULL
         currentLoc = root;
     };
+//    cout<<"Nil: "<<nil->theWord<<endl;
 
 };
 
@@ -213,30 +268,24 @@ dict::~dict()
 
 wDPair * dict::findWord(const char * searchWord)
 {
-//    old version...
-//    for(int i = 0; i < currentSize; i++)
-//    {
-//        if (!strcmp(theDic[i].tellWord(), searchWord))
-//        {
-//            return & theDic[i];
-//        };
-//    };
-//    return NULL;
-    cout << "findWord..."<<endl;
     wDPair *x = root;
-    cout << "*x = root..."<<endl;
-    if (root = nil) return NULL;
-    while ((x != nil) && (searchWord != x->theWord))
+//    cout << "*x = root..."<<endl;
+    if (x == NULL) return NULL;
+//    cout<<"searchWord:"<<searchWord<<", x->theWord:"<<x->theWord<<endl;
+    while ((x != nil) && (strcmp(searchWord, x->theWord) != 0))
     {
-        cout << "(x != nil) && (searchWord != x->theWord)"<<endl;
-        if (searchWord < x->theWord)
+//        cout<<"(x != nil), and ";
+//        cout << "(searchWord != x->theWord):"<<searchWord<<", "<<x->theWord<<endl;
+        if (strcmp(searchWord, x->theWord) < 0)
         {
-            cout << "searchWord < x->theWord"<<endl;
+//            cout << "searchWord < x->theWord"<<endl;
+//            cout << "(searchWord != x->theWord):"<<searchWord<<", "<<x->theWord<<endl;
             x = x->left;
         }
         else
         {
-            cout << "searchWord > x->theWord"<<endl;
+//            cout << "searchWord > x->theWord"<<endl;
+//            cout << "(searchWord != x->theWord):"<<searchWord<<", "<<x->theWord<<endl;
             x = x->right;
         };
     };
@@ -284,60 +333,57 @@ const wDPair* dict::findDef(const char* searchDef)
 //    };
 };
 
-
 bool dict::insertPair(wDPair * newPair)
 {
-    cout<<"insertPair..."<<endl;
+//    cout<<"insertPair..."<<endl;
     if(currentSize == VSIZE)
     {
         return false;
     }
     else
     {
-//    old version...
-//        int i = 0, j;
-//        while ((i < currentSize)&&(strcmp(theDic[i].tellWord(), newPair->tellWord()) < 0))
-//        {
-//            i++;
-//        };
-//        if (i < currentSize)
-//        {
-//            for (j = currentSize; j > i; j--)
-//            {
-//                theDic[j] = theDic[j - 1];
-//            };
-//        };
-//        theDic[i] = *newPair;
-//        currentSize++;
-//        return true;
         wDPair *y = NULL;
-        cout<<"wDPair *y = NULL;";
+//        cout<<"wDPair *y = NULL;";
         wDPair *x = root;
-        cout<<"wDPair *x = root;"<<endl;
-        if (root == nil)
+//        cout<<"wDPair *x = root;"<<endl;
+        if (x == NULL)
         {
-            cout<<"root == nil"<<endl;
+//            cout<<"currentSize == 0"<<endl;
             root = newPair;
+//            cout<<"root=newPair"<<endl;
             newPair->p = newPair->left = newPair->right = nil;
+            newPair->color = 'B';
+//            cout<<"newPair pointers fixed..."<<endl;
+            currentSize++;
+//            cout<<"currentSise: "<<currentSize<<endl;
+//            cout<<"root word, par, left, right, color: "<<root->theWord<<" "
+//                <<((root->p==nil)?"NULL":"Not NULL")<<" "<<((root->left==nil)?"NULL":"Not NULL")<<" "
+//                <<((root->right==nil)?"NULL ":"Not NULL ")<<root->color<<endl;
+
+            return true;
         }
         else
         {
-            cout<<"root!=nil"<<endl;
+//            cout<<"root!=nil"<<endl;
             while (x != nil)
             {
+//                cout<<"x != nil"<<endl;
                 y = x;
-                if (newPair->theWord < x->theWord)
+                if (strcmp(newPair->theWord, x->theWord) < 0)
                 {
                     x = x->left;
+//                    cout<<"x = x->left"<<endl;
                 }
                 else
                 {
                     x = x->right;
+//                    cout<<"x = x->right"<<endl;
                 };
             };
+//            cout<<"x == nil"<<endl;
             newPair->p = y;
             newPair->left = newPair->right = nil;
-            if (newPair->theWord < y->theWord)
+            if (strcmp(newPair->theWord,y->theWord) < 0)
             {
                 y->left = newPair;
             }
@@ -345,36 +391,206 @@ bool dict::insertPair(wDPair * newPair)
             {
                 y->right = newPair;
             };
+//            cout<<"root word, par, left, right, color: "<<root->theWord<<" "
+//                <<((root->p==nil)?"NULL":"Not NULL")<<" "<<((root->left==nil)?"NULL":"Not NULL")<<" "
+//                <<((root->right==nil)?"NULL ":"Not NULL ")<<root->color<<endl;
+//            cout<<"newWord, par, left, right:"<<newPair->theWord<<" "
+//                <<newPair->p->theWord<<" "<<((newPair->left==nil)?"NULL":"Not NULL")<<" "
+//                <<((newPair->right==nil)?"NULL":"Not NULL")<<endl;
             currentSize++;
+//            cout<<"currentSize:"<<currentSize<<endl;
+            newPair->color = 'R';
+            insertFix(newPair);
             return true;
         };
     };
 };
 
+void dict::leftRot(wDPair *rotPair)
+{
+    wDPair *x = rotPair;
+    wDPair *y = x->right;
+    x->right = y->left;
+    y->left->p = x;
+    y->p = x->p;
+    if (x->p == nil)
+    {
+        root = y;
+    }
+    else if (x == x->p->left)
+    {
+        x->p->left = y;
+    }
+    else
+    {
+        x->p->right = y;
+    };
+    y->left = x;
+    x->p = y;
+};
+
+void dict::rightRot(wDPair *rotPair)
+{
+    wDPair *x = rotPair;
+    wDPair *y = x->left;
+    x->left = y->right;
+    y->right->p = x;
+    y->p = x->p;
+    if (x->p == nil)
+    {
+        root = y;
+    }
+    else if (x == x->p->right)
+    {
+        x->p->right = y;
+    }
+    else
+    {
+        x->p->left = y;
+    };
+    y->right = x;
+    x->p = y;
+    return;
+};
+
+bool dict::insertFix(wDPair *newPair)
+{
+    wDPair *z = newPair;
+    while (z->p->color == 'R')
+    {
+        if (z->p == z->p->p->left)
+        {
+            wDPair *y = z->p->p->right;
+            if (y->color == 'R')
+            {
+                z->p->color = 'B';
+                y->color = 'B';
+                z->p->p->color = 'R';
+                z = z->p->p;
+            }
+            else
+            {
+                if (z == z->p->right)
+                {
+                    z = z->p;
+                    leftRot(z);
+                };
+                z->p->color = 'B';
+                z->p->p->color = 'R';
+                rightRot(z->p->p);
+            };
+        }
+        else
+        {
+            wDPair *y = z->p->p->left;
+            if (y->color == 'R')
+            {
+                z->p->color = 'B';
+                y->color = 'B';
+                z->p->p->color = 'R';
+                z = z->p->p;
+            }
+            else
+            {
+                if (z == z->p->left)
+                {
+                    z = z->p;
+                    rightRot(z);
+                };
+                z->p->color = 'B';
+                z->p->p->color = 'R';
+                leftRot(z->p->p);
+            };
+        };
+
+    };
+    root->color = 'B';
+    return true;
+};
+
+bool dict::deleteFix(wDPair *newPair)
+{
+//    cout <<"deleteFix..."<<endl;
+    wDPair *x = newPair;
+    wDPair *w;
+    while ((x != root) && (x->color == 'B'))
+    {
+      if (x == x->p->left)
+      {
+          w = x->p->right;
+          if (w->color == 'R')
+          {
+              w->color = 'B';
+              x->p->color = 'R';
+              leftRot(x->p);
+              w = x->p->right;
+          };
+          if ((w->left->color == 'B') && (w->right->color == 'B'))
+          {
+              w->color = 'R';
+              x = x->p;
+          }
+          else
+          {
+              if (w->right->color == 'B')
+              {
+                  w->left->color = 'B';
+                  w->color = 'R';
+                  rightRot(w);
+                  w = x->p->right;
+              }
+              w->color = x->p->color;
+              x->p->color = 'B';
+              w->right->color = 'B';
+              leftRot(x->p);
+              x = root;
+          };
+      }
+      else
+      {
+          w = x->p->left;
+          if (w->color == 'R')
+          {
+              w->color = 'B';
+              x->p->color = 'R';
+              rightRot(x->p);
+              w = x->p->left;
+          };
+          if ((w->left->color == 'B') && (w->right->color == 'B'))
+          {
+              w->color = 'R';
+              x = x->p;
+          }
+          else
+          {
+              if (w->left->color == 'B')
+              {
+                  w->right->color = 'B';
+                  w->color = 'R';
+                  leftRot(w);
+                  w = x->p->left;
+              }
+              w->color = x->p->color;
+              x->p->color = 'B';
+              w->left->color = 'B';
+              rightRot(x->p);
+              x = root;
+          };
+      };
+    };
+    x->color = 'B';
+    return true;
+};
+
 bool dict::deletePair(const char* oldWord)
 {
-    cout<<"deletePair..."<<endl;
+//    cout<<"deletePair..."<<endl;
     if (currentSize == 0)
     {
         return false;
     }
     else
     {
-//    old version...
-//        for (int i = 0; i < currentSize; i++)
-//        {
-//            if (!strcmp(theDic[i].tellWord(), oldWord))
-//            {
-//                for (int j = i; j < currentSize; j++)
-//                {
-//                    theDic[j] = theDic[j + 1];
-//                };
-//            currentSize--;
-//            return true;
-//            };
-//        };
-//        return false;
-        //wDPair delP = ;
         wDPair *delPair = findWord(oldWord);
         wDPair *y, *x;
         if (delPair == NULL)
@@ -390,9 +606,9 @@ bool dict::deletePair(const char* oldWord)
             else
             {
                 y = nextPair(delPair);
-                if (y = NULL) return false;
+//                cout<<"y: "<<y->theWord<<endl;
             };
-            if (delPair->left != nil)
+            if (y->left != nil)
             {
                 x = y->left;
             }
@@ -400,10 +616,7 @@ bool dict::deletePair(const char* oldWord)
             {
                 x = y->right;
             };
-            if (x != nil)
-            {
-                x->p = y->p;
-            };
+            x->p = y->p;
             if (y->p == nil)
             {
                 root = x;
@@ -421,6 +634,12 @@ bool dict::deletePair(const char* oldWord)
                 strcpy(delPair->theWord, y->theWord);
                 strcpy(delPair->theDef, y->theDef);
             };
+            if (y->color == 'B')
+            {
+                deleteFix(x);
+            };
+            currentSize--;
+            delete y;
             return true;
         };
     };
@@ -436,6 +655,11 @@ bool dict::full(void) const
     return (currentSize == VSIZE);
 };
 
+const wDPair * dict::tellRoot() const
+{
+    return root;
+};
+
 int dict::tellSize(void) const
 {
     return currentSize;
@@ -443,83 +667,66 @@ int dict::tellSize(void) const
 
 const wDPair* dict::tellFirst(void)
 {
+//    cout<<"tellFirst..."<<endl;
     if (empty())
     {
         return NULL;
     }
     else
     {
-//    old version...
-//        currentLoc = 0;
-//        return & theDic[currentLoc];
         wDPair *x = root;
-        while (x->right != nil)
+//        cout<<"x = root:"<<root->theWord<<endl;
+        while (x->left != nil)
         {
-            x = x->right;
+//            cout<<x->theWord<<endl;
+            x = x->left;
         };
         currentLoc = x;
+//        cout<<"currentLoc->theWord, color: "<<currentLoc->theWord<<", "<<currentLoc->color<<endl;
         return x;
     };
 };
 
 const wDPair* dict::tellNext(void)
 {
-    wDPair *x = currentLoc;
-    if (x->right != nil)
-    {
-        x = x->right;
-        while (x->left != nil)
-        {
-            x = x->left;
-        };
-        currentLoc = x;
-        return currentLoc;
-    }
-    else
-    {
-        while (x != x->p->left)
-        {
-           x = x->p;
-           if (x == root)
-           {
-               return NULL;
-           };
-        };
-        currentLoc = x;
-        return currentLoc;
-    };
-//    old version...
-//    else if (x == x->p->left)
-//    {
-//        currentLoc = x->p;
-//        return currentLoc;
-//    }
-//    else
-//    {
-//        while (x != x->p->left)
-//    if(currentLoc == (currentSize - 1))
-//    {
-//        return NULL;
-//    }
-//    else
-//    {
-//        return & theDic[++currentLoc];
-//    };
+//    cout<<"tellNext..."<<endl;
+    currentLoc = nextPair(currentLoc);
+    return currentLoc;
 };
 
 bool dict::diskSave(const char* fileName)
 {
+//    cout<<"diskSave may be implemented..."<<endl;
+//    return true;
     ofstream saveStream(fileName);
     if (!saveStream)
     {
+//        cout <<"No saveStream..."<<endl;
         return false;
     }
     else
     {
-        saveStream << myDic->tellFirst() << '\n';
-        for (int i = 1; i < currentSize; i++)
+        const wDPair* toDo [myDic->tellSize()] ;
+        const wDPair *savePair = myDic->tellRoot();
+        toDo[0] = savePair;
+        int  head = 0;
+        int tail = 0;
+        for (int i = 0; i < myDic->tellSize(); i++)
         {
-            saveStream << myDic->tellNext() << '\n';
+            savePair = toDo[head];
+            saveStream << toDo[head]->tellWord() << '\n' << toDo[head]->tellDef()
+                << '\n'<< ((toDo[head]->left != nil)?'1':'0') << '\n' << ((toDo[head]->right!=nil)?'1':'0') <<'\n';
+            if (toDo[head]->left!= nil)
+            {
+                tail++;
+                toDo[tail] = savePair->left;
+            };
+            if (savePair->right!=nil)
+            {
+                tail++;
+                toDo[tail] = savePair->right;
+            };
+            head++;
         };
         saveStream.close();
         return true;
@@ -528,50 +735,73 @@ bool dict::diskSave(const char* fileName)
 
 bool dict::diskRecover(const char* fileName)
 {
-    char wordBuf[81], defBuf[81];
+//    cout<<"diskRecover implemented...?"<<endl;
+    char wordBuf[81], defBuf[81], leftBuf[81], rightBuf[81];
     ifstream dictStream(fileName);
     if (!dictStream)
     {
+//        cout<<"no stream..."<<endl;
         return false;
     }
     else
     {
+
         wDPair * thePair;
         currentSize = 0;
+        dictStream.getline(wordBuf, 80);
+        dictStream.getline(defBuf, 80);
+        dictStream.getline(leftBuf, 80);
+        dictStream.getline(rightBuf, 80);
+//        cout << "wordBuf: " << wordBuf << endl;
+        if (strcmp(wordBuf, "") == 0) return true;
+        thePair = new wDPair(wordBuf, defBuf);
+        myDic->insertPair(thePair);
+
         while (dictStream.getline(wordBuf, 80) &&
-                dictStream.getline(defBuf, 80) && (currentSize < VSIZE))
+                dictStream.getline(defBuf, 80) && dictStream.getline(leftBuf, 80) &&
+                dictStream.getline(rightBuf, 80) && (currentSize < VSIZE))
         {
             thePair = new wDPair(wordBuf, defBuf);
             insertPair(thePair);
         };
         dictStream.close();
+//        cout<<"diskRecover done..."<<endl;
         return true;
     };
 };
 
 wDPair * dict::nextPair(wDPair* aPair)
 {
+//    cout<<"nextPair..."<<endl;
+//    cout<<"currentLoc->theWord, aPair->theWord: "<<currentLoc->theWord
+//            <<", "<<aPair->theWord<<endl;
     wDPair *x = aPair;
     if (x->right != nil)
     {
+//        cout<<"x has a right child..."<<endl;
         x = x->right;
         while (x->left != nil)
         {
             x = x->left;
         };
+//        cout<<"while loop has passed..."<<"x, x->color: "<<x->theWord<<", "<<x->color<<endl;
         return x;
     }
     else
     {
-        while (x != x->p->left)
+//        cout<<"x has no right child... x->p: "<<x->p->theWord<<endl;
+        wDPair *y = x->p;
+//        cout << "wDPair *y = x->p"<<endl;
+        while ((y != nil) && (x == y->right))
         {
-           x = x->p;
-           if (x == root)
-           {
-               return NULL;
-           };
+//           cout<<"y->theWord: "<<y->theWord<<endl;
+           x = y;
+           y = y->p;
         };
-        return x;
+//        cout << "while loop passed..."<<"y, y->color: "<<y->theWord<<", "<<y->color<<endl;
+        if (y == nil) return NULL;
+
+        return y;
     };
 };
 
@@ -640,11 +870,11 @@ void menu::typicalQuit(void)
     if (yesNo == 'N')
     {
         theChoice = '0';
-        cout << "Press any key to continue: ";
+        cout << "Press the [ENTER] key to continue: ";
     }
     else
     {
-        cout << endl << endl << "Goodbye. Press any key to exit: ";
+        cout << endl << endl << "Goodbye. Press the [ENTER] key to exit: ";
     };
     cin.ignore();
     cin.get();
@@ -675,12 +905,12 @@ void doAdd(void)
         {
             cout << "Please enter the definition: ";
             cin.getline(aDef, 80);
-            wDPair * thePair = new wDPair(aWord, aDef);
+            wDPair* thePair = new wDPair(aWord, aDef);
             myDic->insertPair(thePair);
             cout << endl << setw(45) << "DONE..." << endl;
         };
     };
-    cout << endl << "Press any key to continue...";
+    cout << endl << "Press the [ENTER] key to continue...";
     cin.get();
     system("cls");
 };
@@ -711,7 +941,7 @@ void doFind(void)
                 << thePair->tellDef() << endl;
         };
     };
-    cout << endl << "Press any key to continue...";
+    cout << endl << "Press the [ENTER] key to continue...";
     cin.ignore();
     cin.get();
     system("cls");
@@ -740,7 +970,7 @@ void doList(void)
     cin.ignore();
     cin.get();
     system("cls");
-};
+}
 
 void doDelete(void)
 {
@@ -767,7 +997,7 @@ void doDelete(void)
             cout << theEntry << " has been deleted." << endl;
         };
     };
-    cout << endl << "Press any key to continue...";
+    cout << endl << "Press the [ENTER] key to continue...";
     cin.ignore();
     cin.get();
     system("cls");
